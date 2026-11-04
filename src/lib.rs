@@ -28,6 +28,7 @@ struct AioneGenerateCallbacks {
     on_input_eval: Option<unsafe extern "C" fn(c_float, *mut c_void)>,
     on_generation_start: Option<unsafe extern "C" fn(*mut c_void)>,
     on_think_state_change: Option<unsafe extern "C" fn(c_int, *mut c_void)>,
+    should_stop: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     user_data: *mut c_void,
 }
 
@@ -183,6 +184,7 @@ pub struct GenerateCallbacks {
     pub on_input_eval: Option<Box<dyn FnMut(f32)>>,
     pub on_generation_start: Option<Box<dyn FnMut()>>,
     pub on_think_state_change: Option<Box<dyn FnMut(bool)>>,
+    pub should_stop: Option<Box<dyn FnMut() -> bool>>,
 }
 
 struct ProgressContext<F> {
@@ -249,6 +251,18 @@ unsafe extern "C" fn generation_start_trampoline(user_data: *mut c_void) {
     if let Some(callback) = callbacks.on_generation_start.as_mut() {
         callback();
     }
+}
+
+unsafe extern "C" fn should_stop_trampoline(user_data: *mut c_void) -> c_int {
+    if user_data.is_null() {
+        return 0;
+    }
+
+    let callbacks = unsafe { &mut *(user_data as *mut GenerateCallbacks) };
+    callbacks
+        .should_stop
+        .as_mut()
+        .is_some_and(|callback| callback()) as c_int
 }
 
 unsafe extern "C" fn think_state_trampoline(thinking: c_int, user_data: *mut c_void) {
@@ -341,6 +355,10 @@ impl Session {
             on_think_state_change: callbacks.on_think_state_change.as_ref().map(|_| {
                 think_state_trampoline as unsafe extern "C" fn(c_int, *mut c_void)
             }),
+            should_stop: callbacks
+                .should_stop
+                .as_ref()
+                .map(|_| should_stop_trampoline as unsafe extern "C" fn(*mut c_void) -> c_int),
             user_data: (callbacks as *mut GenerateCallbacks).cast(),
         };
 

@@ -20,7 +20,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=VULKAN_SDK");
 
     if let Some(prefix) = env::var_os("AIONE_LIB_DIR").map(PathBuf::from) {
-        link_prebuilt(&prefix, &out_dir);
+        link_prebuilt(&prefix, &out_dir)
+            .unwrap_or_else(|error| panic!("Failed to stage AIOne runtime libraries: {error}"));
         return;
     }
 
@@ -111,7 +112,8 @@ fn main() {
     apply_env(&mut install, &msvc_env);
     run(&mut install);
 
-    link_prebuilt(&install_dir, &out_dir);
+    link_prebuilt(&install_dir, &out_dir)
+        .unwrap_or_else(|error| panic!("Failed to stage AIOne runtime libraries: {error}"));
 }
 
 fn find_ninja() -> Option<PathBuf> {
@@ -230,7 +232,7 @@ fn is_aione_dir(dir: &Path) -> bool {
     dir.join("CMakeLists.txt").is_file() && dir.join("include").join("AIOne.h").is_file()
 }
 
-fn link_prebuilt(prefix: &Path, out_dir: &Path) {
+fn link_prebuilt(prefix: &Path, out_dir: &Path) -> std::io::Result<()> {
     let lib_dir = if prefix.join("lib").is_dir() {
         prefix.join("lib")
     } else {
@@ -251,19 +253,18 @@ fn link_prebuilt(prefix: &Path, out_dir: &Path) {
         .map(Path::to_path_buf)
         .expect("cargo profile directory");
 
-    copy_runtime_libraries(&bin_dir, &profile_dir);
+    copy_runtime_libraries(&bin_dir, &profile_dir)?;
 
     if bin_dir != lib_dir {
-        copy_runtime_libraries(&lib_dir, &profile_dir);
+        copy_runtime_libraries(&lib_dir, &profile_dir)?;
     }
+
+    Ok(())
 }
 
-fn copy_runtime_libraries(source_dir: &Path, destination_dir: &Path) {
-    let Ok(entries) = fs::read_dir(source_dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
+fn copy_runtime_libraries(source_dir: &Path, destination_dir: &Path) -> std::io::Result<()> {
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
         let source = entry.path();
 
         if !is_runtime_library(&source) {
@@ -275,14 +276,10 @@ fn copy_runtime_libraries(source_dir: &Path, destination_dir: &Path) {
         };
 
         let destination = destination_dir.join(name);
-        if let Err(error) = fs::copy(&source, &destination) {
-            println!(
-                "cargo:warning=Failed to copy {} to {}: {error}",
-                source.display(),
-                destination.display()
-            );
-        }
+        fs::copy(&source, &destination)?;
     }
+
+    Ok(())
 }
 
 fn is_runtime_library(path: &Path) -> bool {
