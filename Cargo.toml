@@ -1,0 +1,21 @@
+[package]
+name = "aione-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Safe Rust bindings for the native AIOne C API"
+repository = "https://github.com/Iemand005/AIOneRS"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "aione_rs"
+path = "src/lib.rs"
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
+[build-dependencies]
+cc = "1"
