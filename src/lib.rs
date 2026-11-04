@@ -12,7 +12,7 @@ use std::os::raw::{c_char, c_float, c_int, c_uint, c_void};
 use std::ptr;
 
 #[cfg(feature = "serde")]
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub type Result<T> = std::result::Result<T, AioneError>;
 
@@ -79,6 +79,26 @@ unsafe extern "C" {
     ) -> AioneGenerateResult;
     fn aione_generate_result_free(result: *mut AioneGenerateResult);
     fn aione_last_error() -> *const c_char;
+    fn aione_chat_list_json() -> *mut c_char;
+    fn aione_chat_create_json(
+        title: *const c_char,
+        model: *const c_char,
+        system_prompt: *const c_char,
+    ) -> *mut c_char;
+    fn aione_chat_load_json(folder: *const c_char) -> *mut c_char;
+    fn aione_chat_append_json(
+        folder: *const c_char,
+        role: *const c_char,
+        content: *const c_char,
+    ) -> *mut c_char;
+    fn aione_chat_update_metadata(
+        folder: *const c_char,
+        title: *const c_char,
+        model: *const c_char,
+        system_prompt: *const c_char,
+    ) -> c_int;
+    fn aione_chat_delete(folder: *const c_char) -> c_int;
+    fn aione_string_free(value: *mut c_char);
 }
 
 #[derive(Debug, Clone)]
@@ -352,5 +372,159 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         unsafe { aione_session_destroy(self.raw) };
+    }
+}
+
+fn to_c_string(value: &str, label: &str) -> Result<CString> {
+    CString::new(value).map_err(|_| AioneError::new(format!("{label} contains a null byte")))
+}
+
+#[cfg(feature = "serde")]
+fn optional_c_string(value: Option<&str>, label: &str) -> Result<Option<CString>> {
+    value.map(|value| to_c_string(value, label)).transpose()
+}
+
+#[cfg(feature = "serde")]
+unsafe fn take_json_string(pointer: *mut c_char) -> Result<String> {
+    if pointer.is_null() {
+        return Err(AioneError::last());
+    }
+
+    let value = unsafe { CStr::from_ptr(pointer) }.to_string_lossy().into_owned();
+    unsafe { aione_string_free(pointer) };
+    Ok(value)
+}
+
+#[cfg(feature = "serde")]
+fn parse_json<T>(json: &str, label: &str) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_str(json)
+        .map_err(|error| AioneError::new(format!("invalid {label} JSON: {error}")))
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMetadata {
+    pub folder: String,
+    pub title: String,
+    pub model: String,
+    pub system_prompt: String,
+    pub created: i64,
+    pub updated: i64,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    pub id: u64,
+    pub parent_id: u64,
+    pub role: String,
+    pub content: String,
+    pub creation_time: i64,
+    pub finish_time: i64,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatData {
+    pub folder: String,
+    pub title: String,
+    pub model: String,
+    pub system_prompt: String,
+    pub created: i64,
+    pub updated: i64,
+    pub messages: Vec<ChatMessage>,
+}
+
+#[cfg(feature = "serde")]
+pub fn list_chats() -> Result<Vec<ChatMetadata>> {
+    let json = unsafe { take_json_string(aione_chat_list_json()) }?;
+    parse_json(&json, "chat list")
+}
+
+#[cfg(feature = "serde")]
+pub fn create_chat(title: &str, model: &str, system_prompt: &str) -> Result<ChatMetadata> {
+    let title = to_c_string(title, "title")?;
+    let model = to_c_string(model, "model")?;
+    let system_prompt = to_c_string(system_prompt, "system prompt")?;
+
+    let json = unsafe {
+        take_json_string(aione_chat_create_json(
+            title.as_ptr(),
+            model.as_ptr(),
+            system_prompt.as_ptr(),
+        ))
+    }?;
+
+    parse_json(&json, "chat metadata")
+}
+
+#[cfg(feature = "serde")]
+pub fn load_chat(folder: &str) -> Result<ChatData> {
+    let folder = to_c_string(folder, "chat folder")?;
+    let json = unsafe { take_json_string(aione_chat_load_json(folder.as_ptr())) }?;
+    parse_json(&json, "chat")
+}
+
+#[cfg(feature = "serde")]
+pub fn append_message(folder: &str, role: &str, content: &str) -> Result<ChatMessage> {
+    let folder = to_c_string(folder, "chat folder")?;
+    let role = to_c_string(role, "role")?;
+    let content = to_c_string(content, "content")?;
+
+    let json = unsafe {
+        take_json_string(aione_chat_append_json(
+            folder.as_ptr(),
+            role.as_ptr(),
+            content.as_ptr(),
+        ))
+    }?;
+
+    parse_json(&json, "chat message")
+}
+
+#[cfg(feature = "serde")]
+pub fn update_chat_metadata(
+    folder: &str,
+    title: Option<&str>,
+    model: Option<&str>,
+    system_prompt: Option<&str>,
+) -> Result<()> {
+    let folder = to_c_string(folder, "chat folder")?;
+    let title = optional_c_string(title, "title")?;
+    let model = optional_c_string(model, "model")?;
+    let system_prompt = optional_c_string(system_prompt, "system prompt")?;
+
+    let updated = unsafe {
+        aione_chat_update_metadata(
+            folder.as_ptr(),
+            title.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+            model.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+            system_prompt
+                .as_ref()
+                .map_or(ptr::null(), |value| value.as_ptr()),
+        )
+    };
+
+    if updated == 0 {
+        Err(AioneError::last())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "serde")]
+pub fn delete_chat(folder: &str) -> Result<()> {
+    let folder = to_c_string(folder, "chat folder")?;
+
+    if unsafe { aione_chat_delete(folder.as_ptr()) } == 0 {
+        Err(AioneError::last())
+    } else {
+        Ok(())
     }
 }
