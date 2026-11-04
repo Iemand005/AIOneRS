@@ -78,7 +78,13 @@ unsafe extern "C" {
         callbacks: *const AioneGenerateCallbacks,
     ) -> AioneGenerateResult;
     fn aione_generate_result_free(result: *mut AioneGenerateResult);
+    fn aione_format_chat_prompt_json(
+        session: *mut AioneSession,
+        messages_json: *const c_char,
+        add_generation_prompt: c_int,
+    ) -> *mut c_char;
     fn aione_last_error() -> *const c_char;
+    fn aione_system_info_json() -> *mut c_char;
     fn aione_chat_list_json() -> *mut c_char;
     fn aione_chat_create_json(
         title: *const c_char,
@@ -90,6 +96,12 @@ unsafe extern "C" {
         folder: *const c_char,
         role: *const c_char,
         content: *const c_char,
+    ) -> *mut c_char;
+    fn aione_chat_append_with_parent_json(
+        folder: *const c_char,
+        role: *const c_char,
+        content: *const c_char,
+        parent_id: u64,
     ) -> *mut c_char;
     fn aione_chat_update_metadata(
         folder: *const c_char,
@@ -367,6 +379,25 @@ impl Session {
         unsafe { aione_generate_result_free(&mut raw_result) };
         Ok(result)
     }
+
+    #[cfg(feature = "serde")]
+    pub fn format_chat_prompt(
+        &mut self,
+        messages: &[ChatPromptMessage],
+        add_generation_prompt: bool,
+    ) -> Result<String> {
+        let json = serde_json::to_string(messages)
+            .map_err(|error| AioneError::new(format!("failed to encode messages: {error}")))?;
+        let json = to_c_string(&json, "messages")?;
+
+        unsafe {
+            take_json_string(aione_format_chat_prompt_json(
+                self.raw,
+                json.as_ptr(),
+                add_generation_prompt as c_int,
+            ))
+        }
+    }
 }
 
 impl Drop for Session {
@@ -418,6 +449,13 @@ pub struct ChatMetadata {
 
 #[cfg(feature = "serde")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatPromptMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     pub id: u64,
@@ -439,6 +477,12 @@ pub struct ChatData {
     pub created: i64,
     pub updated: i64,
     pub messages: Vec<ChatMessage>,
+}
+
+#[cfg(feature = "serde")]
+pub fn system_info() -> Result<serde_json::Value> {
+    let json = unsafe { take_json_string(aione_system_info_json()) }?;
+    parse_json(&json, "system info")
 }
 
 #[cfg(feature = "serde")]
@@ -473,15 +517,26 @@ pub fn load_chat(folder: &str) -> Result<ChatData> {
 
 #[cfg(feature = "serde")]
 pub fn append_message(folder: &str, role: &str, content: &str) -> Result<ChatMessage> {
+    append_message_with_parent(folder, role, content, 0)
+}
+
+#[cfg(feature = "serde")]
+pub fn append_message_with_parent(
+    folder: &str,
+    role: &str,
+    content: &str,
+    parent_id: u64,
+) -> Result<ChatMessage> {
     let folder = to_c_string(folder, "chat folder")?;
     let role = to_c_string(role, "role")?;
     let content = to_c_string(content, "content")?;
 
     let json = unsafe {
-        take_json_string(aione_chat_append_json(
+        take_json_string(aione_chat_append_with_parent_json(
             folder.as_ptr(),
             role.as_ptr(),
             content.as_ptr(),
+            parent_id,
         ))
     }?;
 
