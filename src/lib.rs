@@ -476,8 +476,8 @@ pub struct ChatPromptMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
-    pub id: u64,
-    pub parent_id: u64,
+    pub id: String,
+    pub parent_id: String,
     pub role: String,
     pub content: String,
     pub creation_time: i64,
@@ -495,7 +495,7 @@ pub struct ChatData {
     pub created: i64,
     pub updated: i64,
     pub messages: Vec<ChatMessage>,
-    pub active_path: Vec<u64>,
+    pub active_path: Vec<String>,
 }
 
 #[cfg(feature = "serde")]
