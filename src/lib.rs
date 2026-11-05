@@ -495,6 +495,7 @@ pub struct ChatData {
     pub created: i64,
     pub updated: i64,
     pub messages: Vec<ChatMessage>,
+    pub active_path: Vec<u64>,
 }
 
 #[cfg(feature = "serde")]
