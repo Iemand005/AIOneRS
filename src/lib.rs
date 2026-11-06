@@ -69,6 +69,7 @@ unsafe extern "C" {
         path: *const c_char,
         on_progress: Option<unsafe extern "C" fn(c_float, *mut c_void)>,
         user_data: *mut c_void,
+        no_host: c_int,
     ) -> c_int;
     fn aione_session_unload_model(session: *mut AioneSession);
     fn aione_session_is_loaded(session: *const AioneSession) -> c_int;
@@ -76,6 +77,7 @@ unsafe extern "C" {
         session: *mut AioneSession,
         prompt: *const c_char,
         max_tokens: c_uint,
+        temperature: c_float,
         callbacks: *const AioneGenerateCallbacks,
     ) -> AioneGenerateResult;
     fn aione_generate_result_free(result: *mut AioneGenerateResult);
@@ -293,7 +295,7 @@ impl Session {
         }
     }
 
-    pub fn load_model<F>(&self, path: &str, on_progress: F) -> Result<()>
+    pub fn load_model<F>(&self, path: &str, no_host: bool, on_progress: F) -> Result<()>
     where
         F: FnMut(f32),
     {
@@ -309,6 +311,7 @@ impl Session {
                 path.as_ptr(),
                 Some(progress_trampoline::<F>),
                 (&mut context as *mut ProgressContext<F>).cast(),
+                no_host as c_int,
             )
         };
 
@@ -331,6 +334,7 @@ impl Session {
         &self,
         prompt: &str,
         max_tokens: u32,
+        temperature: f32,
         callbacks: &mut GenerateCallbacks,
     ) -> Result<GenerateResult> {
         let prompt = CString::new(prompt)
@@ -363,7 +367,13 @@ impl Session {
         };
 
         let mut raw_result = unsafe {
-            aione_session_generate(self.raw, prompt.as_ptr(), max_tokens, &raw_callbacks)
+            aione_session_generate(
+                self.raw,
+                prompt.as_ptr(),
+                max_tokens,
+                temperature,
+                &raw_callbacks,
+            )
         };
 
         if raw_result.ok == 0 {
