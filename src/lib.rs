@@ -8,7 +8,7 @@
 
 use std::ffi::{CStr, CString};
 use std::fmt;
-use std::os::raw::{c_char, c_float, c_int, c_uint, c_void};
+use std::os::raw::{c_char, c_float, c_int, c_void};
 use std::ptr;
 
 #[cfg(feature = "serde")]
@@ -61,23 +61,28 @@ impl Default for AioneGenerateResult {
     }
 }
 
+#[repr(C)]
+struct AioneLoadModelOptions {
+    no_host: c_int,
+    context_length: u32,
+}
+
 unsafe extern "C" {
     fn aione_session_create() -> *mut AioneSession;
     fn aione_session_destroy(session: *mut AioneSession);
     fn aione_session_load_model(
         session: *mut AioneSession,
         path: *const c_char,
+        options: *const AioneLoadModelOptions,
         on_progress: Option<unsafe extern "C" fn(c_float, *mut c_void)>,
         user_data: *mut c_void,
-        no_host: c_int,
     ) -> c_int;
     fn aione_session_unload_model(session: *mut AioneSession);
     fn aione_session_is_loaded(session: *const AioneSession) -> c_int;
     fn aione_session_generate(
         session: *mut AioneSession,
         prompt: *const c_char,
-        max_tokens: c_uint,
-        temperature: c_float,
+        options: *const GenerateOptions,
         callbacks: *const AioneGenerateCallbacks,
     ) -> AioneGenerateResult;
     fn aione_generate_result_free(result: *mut AioneGenerateResult);
@@ -177,6 +182,47 @@ pub struct GenerateStats {
 pub struct GenerateResult {
     pub content: String,
     pub stats: GenerateStats,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase", default))]
+pub struct LoadOptions {
+    pub no_host: bool,
+    pub context_length: u32,
+}
+
+impl Default for LoadOptions {
+    fn default() -> Self {
+        Self {
+            no_host: false,
+            context_length: 4096,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase", default))]
+pub struct GenerateOptions {
+    pub max_tokens: u32,
+    pub min_p: f32,
+    pub top_k: c_int,
+    pub temperature: f32,
+    pub seed: u32,
+}
+
+impl Default for GenerateOptions {
+    fn default() -> Self {
+        Self {
+            max_tokens: 128,
+            min_p: 0.05,
+            top_k: 40,
+            temperature: 0.8,
+            seed: 0xFFFFFFFF,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -295,7 +341,7 @@ impl Session {
         }
     }
 
-    pub fn load_model<F>(&self, path: &str, no_host: bool, on_progress: F) -> Result<()>
+    pub fn load_model<F>(&self, path: &str, options: LoadOptions, on_progress: F) -> Result<()>
     where
         F: FnMut(f32),
     {
@@ -304,14 +350,18 @@ impl Session {
         let mut context = ProgressContext {
             callback: on_progress,
         };
+        let options = AioneLoadModelOptions {
+            no_host: options.no_host as c_int,
+            context_length: options.context_length,
+        };
 
         let loaded = unsafe {
             aione_session_load_model(
                 self.raw,
                 path.as_ptr(),
+                &options,
                 Some(progress_trampoline::<F>),
                 (&mut context as *mut ProgressContext<F>).cast(),
-                no_host as c_int,
             )
         };
 
@@ -333,8 +383,7 @@ impl Session {
     pub fn generate(
         &self,
         prompt: &str,
-        max_tokens: u32,
-        temperature: f32,
+        options: GenerateOptions,
         callbacks: &mut GenerateCallbacks,
     ) -> Result<GenerateResult> {
         let prompt = CString::new(prompt)
@@ -370,8 +419,7 @@ impl Session {
             aione_session_generate(
                 self.raw,
                 prompt.as_ptr(),
-                max_tokens,
-                temperature,
+                &options,
                 &raw_callbacks,
             )
         };
