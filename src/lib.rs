@@ -67,6 +67,50 @@ struct AioneLoadModelOptions {
     context_length: u32,
 }
 
+#[repr(C)]
+struct AioneTts {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+struct AioneTtsLoadOptions {
+    thread_count: c_int,
+    flash_attention: c_int,
+    device: c_int,
+}
+
+#[repr(C)]
+struct AioneTtsVoice {
+    reference_file: *const c_char,
+    built_in_name: *const c_char,
+    built_in_index: c_int,
+}
+
+#[repr(C)]
+struct AioneTtsSynthesisOptions {
+    output_type: c_int,
+    voice: AioneTtsVoice,
+    lang: *const c_char,
+    top_k: c_int,
+    top_p: f32,
+    seed: u32,
+    batch_size: c_int,
+    max_tokens: c_int,
+}
+
+#[repr(C)]
+struct AioneTtsSynthesisResult {
+    sample_rate: c_int,
+    samples: i64,
+    audio_type: c_int,
+    data: *mut c_char,
+    data_size: u64,
+    prompt_eval_ms: f64,
+    generation_ms: f64,
+    conversion_ms: f64,
+    ok: c_int,
+}
+
 unsafe extern "C" {
     fn aione_session_create() -> *mut AioneSession;
     fn aione_session_destroy(session: *mut AioneSession);
@@ -118,6 +162,31 @@ unsafe extern "C" {
         system_prompt: *const c_char,
     ) -> c_int;
     fn aione_chat_delete(folder: *const c_char) -> c_int;
+    fn aione_tts_create() -> *mut AioneTts;
+    fn aione_tts_destroy(tts: *mut AioneTts);
+    fn aione_tts_load_model(
+        tts: *mut AioneTts,
+        model_path: *const c_char,
+        mmproj_path: *const c_char,
+        options: *const AioneTtsLoadOptions,
+    ) -> c_int;
+    fn aione_tts_unload_model(tts: *mut AioneTts);
+    fn aione_tts_is_loaded(tts: *const AioneTts) -> c_int;
+    fn aione_tts_voices_json(tts: *mut AioneTts) -> *mut c_char;
+    fn aione_tts_synthesize(
+        tts: *mut AioneTts,
+        prompt: *const c_char,
+        options: *const AioneTtsSynthesisOptions,
+        on_frame: Option<unsafe extern "C" fn(c_int, *mut c_void)>,
+        user_data: *mut c_void,
+    ) -> AioneTtsSynthesisResult;
+    fn aione_tts_synthesis_result_free(result: *mut AioneTtsSynthesisResult);
+    fn aione_tts_save_wav(
+        tts: *mut AioneTts,
+        filename: *const c_char,
+        data: *const c_char,
+        data_size: u64,
+    ) -> c_int;
     fn aione_string_free(value: *mut c_char);
 }
 
