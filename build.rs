@@ -18,6 +18,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=AIONE_DIR");
     println!("cargo:rerun-if-env-changed=AIONE_LIB_DIR");
     println!("cargo:rerun-if-env-changed=VULKAN_SDK");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_TTS");
+
+    let enable_tts = env::var_os("CARGO_FEATURE_TTS").is_some();
 
     if let Some(prefix) = env::var_os("AIONE_LIB_DIR").map(PathBuf::from) {
         link_prebuilt(&prefix, &out_dir)
@@ -80,6 +83,10 @@ fn main() {
         .arg("-DAIONE_UWP=OFF")
         .arg("-DAIONE_ENABLE_OPENAI=OFF")
         .arg("-DAIONE_ENABLE_STABLE_DIFFUSION=OFF")
+        .arg(format!(
+            "-DAIONE_ENABLE_TTS={}",
+            if enable_tts { "ON" } else { "OFF" }
+        ))
         .arg("-DAIONE_VULKAN=ON")
         .arg("-DAIONE_OPENCL=OFF")
         .arg("-DAIONE_VERBOSE=OFF")
