@@ -77,6 +77,8 @@ struct AioneTtsLoadOptions {
     thread_count: c_int,
     flash_attention: c_int,
     device: c_int,
+    on_progress: Option<unsafe extern "C" fn(c_int, f32, *mut c_void)>,
+    user_data: *mut c_void,
 }
 
 #[repr(C)]
@@ -732,6 +734,8 @@ impl Tts {
             thread_count: options.thread_count,
             flash_attention: options.flash_attention as c_int,
             device: options.device.as_raw(),
+            on_progress: None,
+            user_data: ptr::null_mut(),
         };
 
         let loaded = unsafe {
