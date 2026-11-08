@@ -304,6 +304,158 @@ pub struct GenerateCallbacks {
     pub should_stop: Option<Box<dyn FnMut() -> bool>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub enum TtsDevice {
+    Any,
+    Cpu,
+    Igpu,
+    Dgpu,
+    Accelerator,
+}
+
+impl Default for TtsDevice {
+    fn default() -> Self {
+        Self::Any
+    }
+}
+
+impl TtsDevice {
+    fn as_raw(self) -> c_int {
+        match self {
+            Self::Any => 0,
+            Self::Cpu => 1,
+            Self::Igpu => 2,
+            Self::Dgpu => 3,
+            Self::Accelerator => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub enum TtsAudioType {
+    Pcm,
+    Wav,
+}
+
+impl Default for TtsAudioType {
+    fn default() -> Self {
+        Self::Pcm
+    }
+}
+
+impl TtsAudioType {
+    fn as_raw(self) -> c_int {
+        match self {
+            Self::Pcm => 0,
+            Self::Wav => 1,
+        }
+    }
+
+    fn from_raw(value: c_int) -> Self {
+        match value {
+            1 => Self::Wav,
+            _ => Self::Pcm,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase", default))]
+pub struct TtsLoadOptions {
+    pub thread_count: i32,
+    pub flash_attention: bool,
+    pub device: TtsDevice,
+}
+
+impl Default for TtsLoadOptions {
+    fn default() -> Self {
+        Self {
+            thread_count: 6,
+            flash_attention: true,
+            device: TtsDevice::Any,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase", default))]
+pub struct TtsVoice {
+    pub reference_file: Option<String>,
+    pub built_in_name: Option<String>,
+    pub built_in_index: i32,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase", default))]
+pub struct TtsSynthesisOptions {
+    pub output_type: TtsAudioType,
+    pub voice: TtsVoice,
+    pub lang: Option<String>,
+    pub top_k: i32,
+    pub top_p: f32,
+    pub seed: u32,
+    pub batch_size: i32,
+    pub max_tokens: i32,
+}
+
+impl Default for TtsSynthesisOptions {
+    fn default() -> Self {
+        Self {
+            output_type: TtsAudioType::Pcm,
+            voice: TtsVoice::default(),
+            lang: None,
+            top_k: 50,
+            top_p: 1.0,
+            seed: 0xFFFF_FFFF,
+            batch_size: 512,
+            max_tokens: -1,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub struct TtsSynthesisStats {
+    pub prompt_eval_ms: f64,
+    pub generation_ms: f64,
+    pub conversion_ms: f64,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub struct TtsSynthesisResult {
+    pub sample_rate: i32,
+    pub samples: i64,
+    pub audio_type: TtsAudioType,
+    pub audio: Vec<u8>,
+    pub stats: TtsSynthesisStats,
+}
+
+#[derive(Default)]
+pub struct TtsSynthesisCallbacks {
+    pub on_frame: Option<Box<dyn FnMut(i32)>>,
+}
+
+unsafe extern "C" fn tts_frame_trampoline(frame_index: c_int, user_data: *mut c_void) {
+    if user_data.is_null() {
+        return;
+    }
+
+    let callbacks = unsafe { &mut *(user_data as *mut TtsSynthesisCallbacks) };
+    if let Some(callback) = callbacks.on_frame.as_mut() {
+        callback(frame_index);
+    }
+}
+
 struct ProgressContext<F> {
     callback: F,
 }
@@ -551,16 +703,186 @@ impl Drop for Session {
     }
 }
 
+pub struct Tts {
+    raw: *mut AioneTts,
+}
+
+unsafe impl Send for Tts {}
+
+impl Tts {
+    pub fn new() -> Result<Self> {
+        let raw = unsafe { aione_tts_create() };
+
+        if raw.is_null() {
+            Err(AioneError::last())
+        } else {
+            Ok(Self { raw })
+        }
+    }
+
+    pub fn load_model(
+        &self,
+        model_path: &str,
+        mmproj_path: &str,
+        options: TtsLoadOptions,
+    ) -> Result<()> {
+        let model_path = to_c_string(model_path, "model path")?;
+        let mmproj_path = to_c_string(mmproj_path, "mmproj path")?;
+        let options = AioneTtsLoadOptions {
+            thread_count: options.thread_count,
+            flash_attention: options.flash_attention as c_int,
+            device: options.device.as_raw(),
+        };
+
+        let loaded = unsafe {
+            aione_tts_load_model(
+                self.raw,
+                model_path.as_ptr(),
+                mmproj_path.as_ptr(),
+                &options,
+            )
+        };
+
+        if loaded == 0 {
+            Err(AioneError::last())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn unload_model(&self) {
+        unsafe { aione_tts_unload_model(self.raw) };
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        unsafe { aione_tts_is_loaded(self.raw) != 0 }
+    }
+
+    pub fn voices_json(&self) -> Result<String> {
+        unsafe { take_json_string(aione_tts_voices_json(self.raw)) }
+    }
+
+    #[cfg(feature = "serde")]
+    pub fn voices(&self) -> Result<Vec<String>> {
+        let json = self.voices_json()?;
+        parse_json(&json, "TTS voices")
+    }
+
+    pub fn synthesize(
+        &self,
+        prompt: &str,
+        options: TtsSynthesisOptions,
+        callbacks: &mut TtsSynthesisCallbacks,
+    ) -> Result<TtsSynthesisResult> {
+        let prompt =
+            CString::new(prompt).map_err(|_| AioneError::new("prompt contains a null byte"))?;
+        let reference_file =
+            optional_c_string(options.voice.reference_file.as_deref(), "reference file")?;
+        let built_in_name =
+            optional_c_string(options.voice.built_in_name.as_deref(), "built-in voice")?;
+        let lang = optional_c_string(options.lang.as_deref(), "language")?;
+
+        let raw_options = AioneTtsSynthesisOptions {
+            output_type: options.output_type.as_raw(),
+            voice: AioneTtsVoice {
+                reference_file: reference_file.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+                built_in_name: built_in_name.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+                built_in_index: options.voice.built_in_index,
+            },
+            lang: lang.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+            top_k: options.top_k,
+            top_p: options.top_p,
+            seed: options.seed,
+            batch_size: options.batch_size,
+            max_tokens: options.max_tokens,
+        };
+
+        let on_frame = callbacks
+            .on_frame
+            .as_ref()
+            .map(|_| tts_frame_trampoline as unsafe extern "C" fn(c_int, *mut c_void));
+        let user_data: *mut c_void = (callbacks as *mut TtsSynthesisCallbacks).cast();
+
+        let mut raw = unsafe {
+            aione_tts_synthesize(
+                self.raw,
+                prompt.as_ptr(),
+                &raw_options,
+                on_frame,
+                user_data,
+            )
+        };
+
+        if raw.ok == 0 {
+            let error = AioneError::last();
+            unsafe { aione_tts_synthesis_result_free(&mut raw) };
+            return Err(error);
+        }
+
+        let audio = if raw.data.is_null() || raw.data_size == 0 {
+            Vec::new()
+        } else {
+            let size = usize::try_from(raw.data_size)
+                .map_err(|_| AioneError::new("audio buffer is too large"))?;
+            unsafe { std::slice::from_raw_parts(raw.data as *const u8, size) }.to_vec()
+        };
+
+        let result = TtsSynthesisResult {
+            sample_rate: raw.sample_rate,
+            samples: raw.samples,
+            audio_type: TtsAudioType::from_raw(raw.audio_type),
+            audio,
+            stats: TtsSynthesisStats {
+                prompt_eval_ms: raw.prompt_eval_ms,
+                generation_ms: raw.generation_ms,
+                conversion_ms: raw.conversion_ms,
+            },
+        };
+
+        unsafe { aione_tts_synthesis_result_free(&mut raw) };
+        Ok(result)
+    }
+
+    pub fn save_wav(&self, audio: &TtsSynthesisResult, filename: &str) -> Result<()> {
+        if audio.audio_type != TtsAudioType::Wav {
+            return Err(AioneError::new("audio is not WAV encoded"));
+        }
+
+        let filename = to_c_string(filename, "filename")?;
+        let data_size = u64::try_from(audio.audio.len())
+            .map_err(|_| AioneError::new("audio buffer is too large"))?;
+
+        let saved = unsafe {
+            aione_tts_save_wav(
+                self.raw,
+                filename.as_ptr(),
+                audio.audio.as_ptr() as *const c_char,
+                data_size,
+            )
+        };
+
+        if saved == 0 {
+            Err(AioneError::last())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for Tts {
+    fn drop(&mut self) {
+        unsafe { aione_tts_destroy(self.raw) };
+    }
+}
+
 fn to_c_string(value: &str, label: &str) -> Result<CString> {
     CString::new(value).map_err(|_| AioneError::new(format!("{label} contains a null byte")))
 }
 
-#[cfg(feature = "serde")]
 fn optional_c_string(value: Option<&str>, label: &str) -> Result<Option<CString>> {
     value.map(|value| to_c_string(value, label)).transpose()
 }
 
-#[cfg(feature = "serde")]
 unsafe fn take_json_string(pointer: *mut c_char) -> Result<String> {
     if pointer.is_null() {
         return Err(AioneError::last());

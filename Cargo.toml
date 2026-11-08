@@ -11,8 +11,9 @@ name = "aione_rs"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["tts"]
 serde = ["dep:serde", "dep:serde_json"]
+tts = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
